@@ -2,3 +2,4 @@
 .vercel
 .impeccable/
 node_modules/
+.env*
