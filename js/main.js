@@ -299,24 +299,183 @@
     return 'Chưa có';
   }
 
-  var provGrid = $('#province-grid');
-  if (provGrid) {
-  var provSummary = $('#coverage-summary');
-  var mapButtons = $$('.map-toggle button');
-  var restBox = $('#coverage-rest');
+  /* ---------------- Coverage: homepage bubble map (34 new provinces) ---------------- */
   var vnMap = $('#vn-map');
-  var vnPaths = vnMap ? $$('.vn-p', vnMap) : [];
+  var rankList = $('#rank-list');
+  if (vnMap && rankList) {
+  var SVG_NS = 'http://www.w3.org/2000/svg';
+  var vnPaths = $$('.vn-p', vnMap);
   var vnTip = $('#vn-tip');
-  var currentSet = 'old';
+  var mapData = PROVINCE_DATA['new'];
   var lookup = {};
+  mapData.forEach(function (p) { lookup[p.name] = p; });
   // new province -> old provinces it was merged from (read from the map itself)
   var members = {};
   vnPaths.forEach(function (p) {
     var n = p.getAttribute('data-new');
     var o = p.getAttribute('data-old');
     members[n] = members[n] || [];
-    if (members[n].indexOf(o) === -1) members[n].push(o); // inset repeats some provinces
+    if (members[n].indexOf(o) === -1) members[n].push(o); // guard against duplicate paths
   });
+  function mergedNote(name) {
+    var m = members[name];
+    return m && m.length > 1 ? 'Gồm ' + m.join(', ') : '';
+  }
+
+  // Provincial capitals (lon, lat) and the same equirectangular projection the SVG was drawn with.
+  var CAPITALS = {
+    'Hà Nội': [105.84, 21.03], 'Tuyên Quang': [105.22, 21.82], 'Thái Nguyên': [105.84, 21.59],
+    'Phú Thọ': [105.40, 21.32], 'Bắc Ninh': [106.19, 21.27], 'Hưng Yên': [106.05, 20.65],
+    'Hải Phòng': [106.68, 20.86], 'Ninh Bình': [105.97, 20.25], 'TP. Hồ Chí Minh': [106.70, 10.78],
+    'Điện Biên': [103.02, 21.39], 'Quảng Ninh': [107.08, 20.95], 'Thanh Hóa': [105.78, 19.81],
+    'Nghệ An': [105.68, 18.67], 'Hà Tĩnh': [105.90, 18.34], 'Cao Bằng': [106.26, 22.67]
+  };
+  var PROJ_C = Math.cos(16 * Math.PI / 180);
+  function project(name) {
+    var c = CAPITALS[name];
+    if (c) return [(c[0] - 102) * 200 * PROJ_C, (23.5 - c[1]) * 200];
+    // fallback for provinces without a listed capital: centre of their outline
+    var box = null;
+    vnPaths.forEach(function (p) {
+      if (p.getAttribute('data-new') !== name) return;
+      var b = p.getBBox();
+      box = box ? { x0: Math.min(box.x0, b.x), y0: Math.min(box.y0, b.y), x1: Math.max(box.x1, b.x + b.width), y1: Math.max(box.y1, b.y + b.height) }
+                : { x0: b.x, y0: b.y, x1: b.x + b.width, y1: b.y + b.height };
+    });
+    return box ? [(box.x0 + box.x1) / 2, (box.y0 + box.y1) / 2] : null;
+  }
+
+  var present = mapData.filter(function (p) { return (p.open || 0) > 0 || p.coming; });
+  present.sort(function (a, b) {
+    return (b.open || 0) - (a.open || 0) || (b.coming || 0) - (a.coming || 0) || a.name.localeCompare(b.name, 'vi');
+  });
+  var totalOpen = 0, totalComing = 0;
+  mapData.forEach(function (p) { totalOpen += p.open || 0; totalComing += p.coming || 0; });
+  var maxOpen = present.length ? Math.max(1, present[0].open || 0) : 1;
+  var R_MAX = 100, R_MIN = 24; // svg units (map is 2499 units wide)
+  function radius(n) { return Math.max(R_MIN, R_MAX * Math.sqrt(n / maxOpen)); }
+
+  var statOpen = $('#cov-open'), statComing = $('#cov-coming'), statProv = $('#cov-prov');
+  if (statOpen) statOpen.textContent = totalOpen;
+  if (statComing) statComing.textContent = totalComing;
+  if (statProv) statProv.textContent = present.length;
+
+  // tint provinces that have a location
+  vnPaths.forEach(function (p) { p.classList.toggle('is-present', !!lookup[p.getAttribute('data-new')] && present.indexOf(lookup[p.getAttribute('data-new')]) !== -1); });
+
+  // bubbles: largest first so small ones stay on top
+  var LABELS = { 'Hà Nội': 'left', 'TP. Hồ Chí Minh': 'right' };
+  var gDots = document.createElementNS(SVG_NS, 'g');
+  gDots.setAttribute('class', 'vn-dots');
+  var gText = document.createElementNS(SVG_NS, 'g');
+  gText.setAttribute('class', 'vn-dot-text');
+  present.forEach(function (p) {
+    var xy = project(p.name);
+    if (!xy) return;
+    var r = (p.open || 0) > 0 ? radius(p.open) : R_MIN;
+    var c = document.createElementNS(SVG_NS, 'circle');
+    c.setAttribute('cx', xy[0].toFixed(1));
+    c.setAttribute('cy', xy[1].toFixed(1));
+    c.setAttribute('r', r.toFixed(1));
+    c.setAttribute('class', 'vn-dot' + ((p.open || 0) > 0 ? '' : ' is-coming'));
+    c.setAttribute('data-name', p.name);
+    gDots.appendChild(c);
+    if (r >= 60) {
+      var num = document.createElementNS(SVG_NS, 'text');
+      num.setAttribute('x', xy[0].toFixed(1));
+      num.setAttribute('y', xy[1].toFixed(1));
+      num.setAttribute('class', 'vn-dot-num');
+      num.textContent = p.open;
+      gText.appendChild(num);
+    }
+    if (LABELS[p.name]) {
+      var left = LABELS[p.name] === 'left';
+      var t = document.createElementNS(SVG_NS, 'text');
+      t.setAttribute('x', (xy[0] + (left ? -(r + 16) : r + 16)).toFixed(1));
+      t.setAttribute('y', xy[1].toFixed(1));
+      t.setAttribute('class', 'vn-dot-label');
+      t.setAttribute('text-anchor', left ? 'end' : 'start');
+      t.textContent = p.name;
+      gText.appendChild(t);
+    }
+  });
+  vnMap.appendChild(gDots);
+  vnMap.appendChild(gText);
+  var vnDots = $$('.vn-dot', vnMap);
+
+  // ranked list
+  var maxTotal = present.length ? Math.max.apply(null, present.map(function (p) { return (p.open || 0) + (p.coming || 0); })) : 1;
+  var frag = document.createDocumentFragment();
+  present.forEach(function (p) {
+    var li = document.createElement('li');
+    li.className = 'rank-item';
+    li.setAttribute('data-name', p.name);
+    var head = document.createElement('div');
+    head.className = 'rank-head';
+    var b = document.createElement('b'); b.textContent = p.name;
+    var v = document.createElement('span'); v.className = 'rank-val'; v.textContent = getLabel(p);
+    head.appendChild(b); head.appendChild(v);
+    var bar = document.createElement('div');
+    bar.className = 'rank-bar';
+    bar.setAttribute('aria-hidden', 'true');
+    if (p.open) { var io = document.createElement('i'); io.style.width = (p.open / maxTotal * 100) + '%'; bar.appendChild(io); }
+    if (p.coming) { var ic = document.createElement('i'); ic.className = 'is-coming'; ic.style.width = (p.coming / maxTotal * 100) + '%'; bar.appendChild(ic); }
+    li.appendChild(head);
+    li.appendChild(bar);
+    frag.appendChild(li);
+  });
+  rankList.replaceChildren(frag);
+
+  /* tooltip + highlight (mouse, touch; the ranked list carries the same data for keyboard/AT) */
+  function highlight(key) {
+    vnMap.classList.toggle('has-hl', !!key);
+    vnPaths.forEach(function (p) { p.classList.toggle('is-hl', !!key && p.getAttribute('data-new') === key); });
+    vnDots.forEach(function (d) { d.classList.toggle('is-hl', !!key && d.getAttribute('data-name') === key); });
+    $$('.rank-item', rankList).forEach(function (li) { li.classList.toggle('is-hl', !!key && li.getAttribute('data-name') === key); });
+  }
+  function hideTip() {
+    if (vnTip) vnTip.hidden = true;
+    highlight(null);
+  }
+  function showTip(e) {
+    var el = e.target.closest ? e.target.closest('.vn-dot, .vn-p') : null;
+    if (!el) { hideTip(); return; }
+    var key = el.getAttribute(el.classList.contains('vn-dot') ? 'data-name' : 'data-new');
+    var rec = lookup[key];
+    if (!rec) { hideTip(); return; }
+    vnTip.replaceChildren();
+    var b = document.createElement('b'); b.textContent = key;
+    var s = document.createElement('span'); s.textContent = getLabel(rec);
+    vnTip.appendChild(b); vnTip.appendChild(s);
+    var note = mergedNote(key);
+    if (note) { var sm = document.createElement('small'); sm.textContent = note; vnTip.appendChild(sm); }
+    var box = vnTip.parentNode.getBoundingClientRect();
+    var x = Math.min(Math.max(e.clientX - box.left, 90), box.width - 90);
+    var y = e.clientY - box.top;
+    vnTip.style.left = x + 'px';
+    vnTip.style.top = y + 'px';
+    vnTip.classList.toggle('is-below', y < 110);
+    vnTip.hidden = false;
+    highlight(key);
+  }
+  if (vnTip) {
+    vnMap.addEventListener('pointermove', showTip);
+    vnMap.addEventListener('click', showTip);
+    vnMap.addEventListener('pointerleave', function (e) { if (e.pointerType === 'mouse') hideTip(); });
+    document.addEventListener('click', function (e) { if (!vnMap.contains(e.target)) hideTip(); });
+  }
+  rankList.addEventListener('mouseover', function (e) {
+    var li = e.target.closest('li[data-name]');
+    highlight(li ? li.getAttribute('data-name') : null);
+  });
+  rankList.addEventListener('mouseleave', function () { highlight(null); });
+  }
+
+  /* ---------------- Coverage: province chips with old/new toggle (helpspa) ---------------- */
+  var provGrid = $('#province-grid');
+  if (provGrid) {
+  var provSummary = $('#coverage-summary');
+  var mapButtons = $$('.map-toggle button');
 
   function renderProvinces(set) {
     var data = PROVINCE_DATA[set];
@@ -325,21 +484,14 @@
       var sa = (a.open || 0) * 1000 + (a.coming || 0), sb = (b.open || 0) * 1000 + (b.coming || 0);
       return sb - sa || a.name.localeCompare(b.name, 'vi');
     });
-    var open = 0, coming = 0, provinces = 0, rest = [];
+    var open = 0, coming = 0, provinces = 0;
     var frag = document.createDocumentFragment();
-    currentSet = set;
-    lookup = {};
     sorted.forEach(function (p) {
-      lookup[p.name] = p;
       open += p.open || 0;
       coming += p.coming || 0;
-      var present = (p.open || 0) > 0 || p.coming;
-      if (present) provinces++;
-      // With the map + "rest" box, the list only shows provinces that have (or will have) a location.
-      if (restBox && !present) { rest.push(p.name); return; }
+      if ((p.open || 0) > 0 || p.coming) provinces++;
       var li = document.createElement('li');
       li.className = 'prov st-' + getStatus(p);
-      li.setAttribute('data-name', p.name);
       var b = document.createElement('b');
       b.textContent = p.name;
       var s = document.createElement('span');
@@ -349,19 +501,6 @@
       frag.appendChild(li);
     });
     provGrid.replaceChildren(frag);
-    if (restBox) {
-      rest.sort(function (a, b) { return a.localeCompare(b, 'vi'); });
-      restBox.querySelector('summary').textContent = 'Các tỉnh/thành chưa có cơ sở (' + rest.length + ')';
-      restBox.querySelector('p').textContent = rest.join(', ') + '.';
-    }
-    if (vnMap) {
-      vnMap.classList.toggle('is-new', set === 'new');
-      vnPaths.forEach(function (path) {
-        var rec = lookup[path.getAttribute(set === 'new' ? 'data-new' : 'data-old')];
-        path.setAttribute('class', 'vn-p st-' + (rec ? getStatus(rec) : 0));
-      });
-      hideTip();
-    }
     if (provSummary) provSummary.innerHTML = '<b>' + open + '</b> cơ sở đang hoạt động · <b>' + coming + '</b> cơ sở sắp mở · có mặt tại <b>' +
       provinces + '</b>/' + data.length + ' tỉnh/thành';
   }
@@ -376,57 +515,6 @@
       renderProvinces(btn.getAttribute('data-set'));
     });
   });
-  /* Map tooltip + highlight (mouse, touch; the list beside the map carries the same data for keyboard/AT) */
-  function keyOf(path) { return path.getAttribute(currentSet === 'new' ? 'data-new' : 'data-old'); }
-  function highlight(key) {
-    if (!vnMap) return;
-    vnMap.classList.toggle('has-hl', !!key);
-    vnPaths.forEach(function (p) { p.classList.toggle('is-hl', !!key && keyOf(p) === key); });
-  }
-  function hideTip() {
-    if (vnTip) vnTip.hidden = true;
-    highlight(null);
-  }
-  function showTip(e) {
-    var path = e.target.closest ? e.target.closest('.vn-p') : null;
-    if (!path) { hideTip(); return; }
-    var key = keyOf(path);
-    var rec = lookup[key];
-    if (!rec) return;
-    var extra = '';
-    if (currentSet === 'new' && members[key] && members[key].length > 1) {
-      extra = 'Gồm: ' + members[key].join(', ');
-    } else if (currentSet === 'old' && path.getAttribute('data-new') !== key) {
-      extra = 'Từ 7/2025 thuộc ' + path.getAttribute('data-new');
-    } else if (currentSet === 'old' && members[key] && members[key].length > 1) {
-      extra = 'Từ 7/2025 sáp nhập thêm ' + members[key].filter(function (n) { return n !== key; }).join(', ');
-    }
-    vnTip.replaceChildren();
-    var b = document.createElement('b'); b.textContent = key;
-    var s = document.createElement('span'); s.textContent = getLabel(rec);
-    vnTip.appendChild(b); vnTip.appendChild(s);
-    if (extra) { var sm = document.createElement('small'); sm.textContent = extra; vnTip.appendChild(sm); }
-    var box = vnTip.parentNode.getBoundingClientRect();
-    var x = Math.min(Math.max(e.clientX - box.left, 90), box.width - 90);
-    var y = e.clientY - box.top;
-    vnTip.style.left = x + 'px';
-    vnTip.style.top = y + 'px';
-    vnTip.classList.toggle('is-below', y < 110);
-    vnTip.hidden = false;
-    highlight(key);
-  }
-  if (vnMap && vnTip) {
-    vnMap.addEventListener('pointermove', showTip);
-    vnMap.addEventListener('click', showTip);
-    vnMap.addEventListener('pointerleave', function (e) { if (e.pointerType === 'mouse') hideTip(); });
-    document.addEventListener('click', function (e) { if (!vnMap.contains(e.target)) hideTip(); });
-    provGrid.addEventListener('mouseover', function (e) {
-      var li = e.target.closest('li[data-name]');
-      highlight(li ? li.getAttribute('data-name') : null);
-    });
-    provGrid.addEventListener('mouseleave', function () { highlight(null); });
-  }
-
   renderProvinces('old');
   }
 

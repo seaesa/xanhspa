@@ -1,0 +1,7 @@
+{
+  "cleanUrls": true,
+  "trailingSlash": false,
+  "redirects": [
+    { "source": "/he-thong-co-so", "destination": "/#ban-do", "permanent": true }
+  ]
+}
